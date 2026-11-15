@@ -740,9 +740,6 @@ struct Scanner {
             if !isBreakOrEnd() && maxBlankIndent > column && column >= minIndent {
                 throw error("a leading empty line has more spaces than the first content line")
             }
-            if blockIndent > column {
-                // Rewind is unnecessary: the content line is less indented, so the scalar is empty.
-            }
         }
         var lineBreak = ""
         while column == blockIndent && !atEnd && !atDocumentMarker() {

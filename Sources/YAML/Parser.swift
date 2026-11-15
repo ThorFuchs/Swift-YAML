@@ -88,7 +88,7 @@ struct Parser {
                 let content = try peek()
                 switch content.kind {
                 case .versionDirective, .tagDirective, .documentStart, .documentEnd, .streamEnd:
-                    root = try countNode(.empty(at: content.start), depth: 0)
+                    root = try countNode(.empty(at: content.start))
                 default:
                     root = try parseNode(block: true, indentlessSequence: false)
                 }
@@ -108,7 +108,7 @@ struct Parser {
 
     private var declaredHandles: Set<String> = []
 
-    private mutating func countNode(_ node: Node, depth: Int) throws(YAMLError) -> Node {
+    private mutating func countNode(_ node: Node) throws(YAMLError) -> Node {
         nodeCount += 1
         if nodeCount > limits.maxNodes {
             throw YAMLError(.nodeLimitExceeded, "more than \(limits.maxNodes) nodes", at: node.mark)
@@ -182,7 +182,7 @@ struct Parser {
     }
 
     private mutating func empty(at mark: Mark) throws(YAMLError) -> Node {
-        try countNode(.empty(at: mark), depth: 0)
+        try countNode(.empty(at: mark))
     }
 
     /// Parses a node or the empty node if the next token is in `stop`.
@@ -211,7 +211,7 @@ struct Parser {
                 nextAnchorID += 1
             }
         }
-        return try countNode(node, depth: 0)
+        return try countNode(node)
     }
 
     private mutating func startNode(block: Bool, indentless: Bool, stack: inout [Frame]) throws(YAMLError) -> Step {
@@ -224,7 +224,7 @@ struct Parser {
                 }
                 throw YAMLError(.undefinedAlias, "alias *\(name) has no preceding anchor", at: first.start)
             }
-            return .deliver(try countNode(Node(kind: .alias(id, name: name), mark: first.start), depth: 0))
+            return .deliver(try countNode(Node(kind: .alias(id, name: name), mark: first.start)))
         }
         var properties: Properties?
         for _ in 0..<2 {
