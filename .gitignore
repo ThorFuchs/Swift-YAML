@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+Artifacts/
+__pycache__/
+
+.references/
+.toolchains/

@@ -1,0 +1,10 @@
+Swift-YAML
+Copyright 2026 Thorsten Fuchs
+
+Swift-YAML is licensed under the Apache License, Version 2.0.
+See LICENSE in the root of this repository.
+
+Tests/YAMLTests/Fixtures/yaml-test-suite contains test cases copied from the
+YAML Test Suite (https://github.com/yaml/yaml-test-suite), tag data-2022-01-17,
+which is distributed under the MIT License. See
+Tests/YAMLTests/Fixtures/yaml-test-suite/LICENSE.
