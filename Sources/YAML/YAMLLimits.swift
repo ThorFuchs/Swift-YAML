@@ -15,7 +15,7 @@ public struct YAMLLimits: Sendable, Equatable {
     /// Creates limits; every value must be positive.
     public init(
         maxInputBytes: Int = 8 * 1024 * 1024,
-        maxDepth: Int = 64,
+        maxDepth: Int = 128,
         maxNodes: Int = 1_000_000,
         maxAliasExpansion: Int = 100_000
     ) {
@@ -25,6 +25,6 @@ public struct YAMLLimits: Sendable, Equatable {
         self.maxAliasExpansion = maxAliasExpansion
     }
 
-    /// 8 MiB input, depth 64, 1,000,000 nodes, 100,000 alias-expanded nodes.
+    /// 8 MiB input, depth 128, 1,000,000 nodes, 100,000 alias-expanded nodes.
     public static let `default` = YAMLLimits()
 }

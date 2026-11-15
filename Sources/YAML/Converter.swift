@@ -29,8 +29,84 @@ struct Converter {
         self.jsonLimits = jsonLimits
     }
 
-    mutating func convert(_ node: Node) throws(YAMLError) -> JSON {
-        try convert(node, depth: 0).json
+    /// A collection being converted; children are visited in source order without recursion.
+    private struct Frame {
+        let node: Node
+        let children: [Node]          // items, or keys and values interleaved
+        let isMapping: Bool
+        var nextChild = 0
+        var values: [JSON] = []
+        var members: [JSONMember] = []
+        var seen = Set<JSONKey>()
+        var pendingKey: JSONKey?
+        var size = 1
+        var height = 1
+    }
+
+    mutating func convert(_ root: Node) throws(YAMLError) -> JSON {
+        var stack: [Frame] = []
+        var next: Node? = root
+        while let node = next {
+            next = nil
+            var produced: Converted
+            switch node.kind {
+            case .alias(let id, let name):
+                produced = try expandAlias(id, name: name, mark: node.mark, depth: stack.count)
+            case .scalar(let text, let style):
+                produced = Converted(json: try resolveScalar(text, style: style, tag: node.tag, mark: node.mark), size: 1, height: 0)
+                try record(produced, for: node)
+            case .sequence(let items):
+                try checkCollectionTag(node, expected: "seq")
+                try checkDepth(stack.count, node.mark)
+                stack.append(Frame(node: node, children: items, isMapping: false))
+                if let child = Self.nextChild(&stack[stack.count - 1]) { next = child; continue }
+                produced = try close(&stack)
+            case .mapping(let pairs):
+                try checkCollectionTag(node, expected: "map")
+                try checkDepth(stack.count, node.mark)
+                var children: [Node] = []
+                children.reserveCapacity(pairs.count * 2)
+                for pair in pairs { children.append(pair.key); children.append(pair.value) }
+                stack.append(Frame(node: node, children: children, isMapping: true))
+                if let child = Self.nextChild(&stack[stack.count - 1]) { next = child; continue }
+                produced = try close(&stack)
+            }
+            // Hand the value to its parents, closing every collection that is now complete.
+            while true {
+                guard !stack.isEmpty else { return produced.json }
+                try add(produced, to: &stack[stack.count - 1])
+                if let child = Self.nextChild(&stack[stack.count - 1]) { next = child; break }
+                produced = try close(&stack)
+            }
+        }
+        throw YAMLError(.syntax, "internal converter state error", at: root.mark)
+    }
+
+    private static func nextChild(_ frame: inout Frame) -> Node? {
+        guard frame.nextChild < frame.children.count else { return nil }
+        defer { frame.nextChild += 1 }
+        return frame.children[frame.nextChild]
+    }
+
+    private func checkDepth(_ depth: Int, _ mark: Mark) throws(YAMLError) {
+        guard depth < limits.maxDepth else {
+            throw YAMLError(.depthLimitExceeded, "nesting is deeper than \(limits.maxDepth)", at: mark)
+        }
+    }
+
+    private mutating func expandAlias(_ id: Int, name: String, mark: Mark, depth: Int) throws(YAMLError) -> Converted {
+        guard let target = anchored[id] else {
+            throw YAMLError(.undefinedAlias, "alias *\(name) has no preceding anchor", at: mark)
+        }
+        aliasNodes += target.size
+        if aliasNodes > limits.maxAliasExpansion {
+            throw YAMLError(.aliasExpansionLimitExceeded, "alias expansion exceeds \(limits.maxAliasExpansion) nodes", at: mark)
+        }
+        if depth + target.height > limits.maxDepth {
+            throw YAMLError(.depthLimitExceeded, "nesting is deeper than \(limits.maxDepth)", at: mark)
+        }
+        try countNodes(target.size, at: mark)
+        return target
     }
 
     private mutating func countNodes(_ n: Int, at mark: Mark) throws(YAMLError) {
@@ -43,78 +119,50 @@ struct Converter {
         }
     }
 
-    private mutating func convert(_ node: Node, depth: Int) throws(YAMLError) -> Converted {
-        var result: Converted
-        switch node.kind {
-        case .alias(let id, let name):
-            guard let target = anchored[id] else {
-                throw YAMLError(.undefinedAlias, "alias *\(name) has no preceding anchor", at: node.mark)
-            }
-            aliasNodes += target.size
-            if aliasNodes > limits.maxAliasExpansion {
-                throw YAMLError(.aliasExpansionLimitExceeded,
-                                "alias expansion exceeds \(limits.maxAliasExpansion) nodes", at: node.mark)
-            }
-            if depth + target.height > limits.maxDepth {
-                throw YAMLError(.depthLimitExceeded, "nesting is deeper than \(limits.maxDepth)", at: node.mark)
-            }
-            try countNodes(target.size, at: node.mark)
-            return target
-
-        case .scalar(let text, let style):
-            result = Converted(json: try resolveScalar(text, style: style, tag: node.tag, mark: node.mark), size: 1, height: 0)
-
-        case .sequence(let items):
-            try checkCollectionTag(node, expected: "seq")
-            guard depth < limits.maxDepth else {
-                throw YAMLError(.depthLimitExceeded, "nesting is deeper than \(limits.maxDepth)", at: node.mark)
-            }
-            var values: [JSON] = []
-            values.reserveCapacity(items.count)
-            var size = 1, height = 1
-            for item in items {
-                let converted = try convert(item, depth: depth + 1)
-                values.append(converted.json)
-                size += converted.size
-                height = max(height, converted.height + 1)
-            }
-            result = Converted(json: .array(values), size: size, height: height)
-
-        case .mapping(let pairs):
-            try checkCollectionTag(node, expected: "map")
-            guard depth < limits.maxDepth else {
-                throw YAMLError(.depthLimitExceeded, "nesting is deeper than \(limits.maxDepth)", at: node.mark)
-            }
-            var members: [JSONMember] = []
-            members.reserveCapacity(pairs.count)
-            var seen = Set<JSONKey>()
-            var size = 1, height = 1
-            for pair in pairs {
-                let key = try convert(pair.key, depth: depth + 1)
-                guard case .string(let keyText) = key.json else {
-                    throw YAMLError(.nonStringKey, "mapping key must be a string, found \(Self.kindName(key.json))",
-                                    at: pair.key.mark)
-                }
-                let jsonKey = JSONKey(keyText)
-                guard seen.insert(jsonKey).inserted else {
-                    throw YAMLError(.duplicateKey, "duplicate mapping key \"\(keyText)\"", at: pair.key.mark)
-                }
-                let value = try convert(pair.value, depth: depth + 1)
-                members.append(JSONMember(jsonKey, value: value.json))
-                size += key.size + value.size
-                height = max(height, value.height + 1)
-            }
-            let object: JSONObject
-            do {
-                object = try JSONObject(members: members, limits: jsonLimits)
-            } catch {
-                throw YAMLError(.nodeLimitExceeded, "mapping exceeds Swift-JSON construction limits", at: node.mark)
-            }
-            result = Converted(json: .object(object), size: size, height: height)
-        }
+    private mutating func record(_ converted: Converted, for node: Node) throws(YAMLError) {
         try countNodes(1, at: node.mark)
-        if let id = node.anchorID { anchored[id] = result }
-        return result
+        if let id = node.anchorID { anchored[id] = converted }
+    }
+
+    private func add(_ child: Converted, to frame: inout Frame) throws(YAMLError) {
+        frame.size += child.size
+        if !frame.isMapping {
+            frame.values.append(child.json)
+            frame.height = max(frame.height, child.height + 1)
+            return
+        }
+        if let key = frame.pendingKey {
+            frame.pendingKey = nil
+            frame.members.append(JSONMember(key, value: child.json))
+            frame.height = max(frame.height, child.height + 1)
+            return
+        }
+        let keyNode = frame.children[frame.nextChild - 1]
+        guard case .string(let keyText) = child.json else {
+            throw YAMLError(.nonStringKey, "mapping key must be a string, found \(Self.kindName(child.json))", at: keyNode.mark)
+        }
+        let key = JSONKey(keyText)
+        guard frame.seen.insert(key).inserted else {
+            throw YAMLError(.duplicateKey, "duplicate mapping key \"\(keyText)\"", at: keyNode.mark)
+        }
+        frame.pendingKey = key
+    }
+
+    private mutating func close(_ stack: inout [Frame]) throws(YAMLError) -> Converted {
+        guard let frame = stack.popLast() else { throw YAMLError(.syntax, "internal converter state error", at: .start) }
+        let json: JSON
+        if frame.isMapping {
+            do {
+                json = .object(try JSONObject(members: frame.members, limits: jsonLimits))
+            } catch {
+                throw YAMLError(.nodeLimitExceeded, "mapping exceeds Swift-JSON construction limits", at: frame.node.mark)
+            }
+        } else {
+            json = .array(frame.values)
+        }
+        let converted = Converted(json: json, size: frame.size, height: frame.height)
+        try record(converted, for: frame.node)
+        return converted
     }
 
     private static func kindName(_ json: JSON) -> String {
