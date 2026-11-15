@@ -60,6 +60,8 @@ private struct SimpleKey {
     var tokenNumber: Int
     var required: Bool
     var mark: Mark
+    /// The whitespace before the key contained a tab.
+    var tabbed: Bool
 }
 
 /// Decodes UTF-8 and rejects characters outside YAML's printable set (c-printable).
@@ -107,10 +109,12 @@ struct Scanner {
     private var indents: [Int] = []
     private var allowSimpleKey = true
     private var possibleSimpleKeys: [SimpleKey?] = [nil]
-    /// Whether a token already started on the current line.
-    private var lineHasContent = false
-    /// End index of the last JSON-like token (quoted scalar or flow collection end), for `"a":b` in flow.
-    private var adjacentValueIndex = -1
+    /// The whitespace just before the current token contained a tab.
+    private var tabBeforeToken = false
+    /// The previous token was a quoted scalar or a flow collection end, so `:` may follow it directly in flow.
+    private var lastTokenJSONLike = false
+    /// The previous token could have been an implicit key (scalar, alias, flow collection end).
+    private var lastTokenKeyLike = false
 
     init(_ scalars: [Unicode.Scalar]) {
         s = scalars
@@ -178,7 +182,7 @@ struct Scanner {
             let c = s[index]
             index += 1
             if c == "\n" || (c == "\r" && peek() != "\n") {
-                line += 1; column = 0; lineHasContent = false
+                line += 1; column = 0
             } else {
                 column += 1
             }
@@ -199,6 +203,23 @@ struct Scanner {
         return isBlankOrBreakOrEnd(3)
     }
 
+    /// Whether only blanks precede the current position on its line.
+    private func firstOnLine() -> Bool {
+        var j = index - 1
+        while j >= index - column && j >= 0 {
+            if !Self.isBlank(s[j]) { return false }
+            j -= 1
+        }
+        return true
+    }
+
+    /// Leading spaces (not tabs) of the current line.
+    private func lineIndentSpaces() -> Int {
+        var j = index - column
+        while j < index && s[j] == " " { j += 1 }
+        return j - (index - column)
+    }
+
     private func checkDocumentStart() -> Bool { atDocumentMarker() && peek() == "-" }
     private func checkDocumentEnd() -> Bool { atDocumentMarker() && peek() == "." }
 
@@ -213,9 +234,20 @@ struct Scanner {
     private mutating func fetchNextToken() throws(YAMLError) {
         try scanToNextToken()
         try staleSimpleKeys()
+        let jsonLike = lastTokenJSONLike
+        let keyLike = lastTokenKeyLike
+        lastTokenJSONLike = false
+        lastTokenKeyLike = false
+        if !atEnd && firstOnLine() {
+            let spaces = lineIndentSpaces()
+            if flowLevel > 0 && spaces <= indent {
+                throw error("flow content must be indented more than the enclosing block")
+            }
+            if flowLevel == 0 && tabBeforeToken && spaces <= indent {
+                throw error("tab characters must not be used for indentation")
+            }
+        }
         unwindIndent(column)
-        let hadContent = lineHasContent
-        lineHasContent = true
         if atEnd { fetchStreamEnd(); return }
         let c = peek()
         if column == 0 && c == "%" { try fetchDirective(); return }
@@ -231,7 +263,7 @@ struct Scanner {
         }
         if c == "-" && isBlankOrBreakOrEnd(1) { try fetchBlockEntry(); return }
         if c == "?" && isBlankOrBreakOrEnd(1) { try fetchKey(); return }
-        if c == ":" && checkValue() { try fetchValue(hadContent: hadContent); return }
+        if c == ":" && checkValue(jsonLike: jsonLike) { try fetchValue(keyLike: keyLike); return }
         switch c {
         case "*": try fetchAnchor(alias: true); return
         case "&": try fetchAnchor(alias: false); return
@@ -243,13 +275,12 @@ struct Scanner {
         default: break
         }
         if checkPlain() { try fetchPlain(); return }
-        if c == "\t" { throw error("tab characters must not be used for indentation") }
         throw error("found character '\(c.escaped(asASCII: true))' that cannot start any token")
     }
 
-    private func checkValue() -> Bool {
+    private func checkValue(jsonLike: Bool) -> Bool {
         if flowLevel > 0 {
-            if adjacentValueIndex == index { return true }
+            if jsonLike { return true }
             return isBlankOrBreakOrEnd(1) || flowIndicators.contains(peek(1))
         }
         return isBlankOrBreakOrEnd(1)
@@ -270,19 +301,13 @@ struct Scanner {
     private mutating func scanToNextToken() throws(YAMLError) {
         if index == 0 && peek() == "\u{FEFF}" { forward() }
         while true {
-            while true {
-                let c = peek()
-                if c == " " && index < s.count { forward(); continue }
-                if c == "\t" && index < s.count {
-                    if flowLevel > 0 || !allowSimpleKey || lineHasContent { forward(); continue }
-                    // A tab in indentation is only allowed on a line that holds nothing but blanks or a comment.
-                    var j = index
-                    while j < s.count && Self.isBlank(s[j]) { j += 1 }
-                    if j >= s.count || Self.isBreak(s[j]) || s[j] == "#" { forward(j - index); continue }
-                }
-                break
+            var sawTab = false
+            while Self.isBlank(peek()) && !atEnd {
+                if peek() == "\t" { sawTab = true }
+                forward()
             }
-            if peek() == "#" && index < s.count {
+            tabBeforeToken = sawTab
+            if peek() == "#" && !atEnd {
                 if index > 0 && !Self.isBlank(s[index - 1]) && !Self.isBreak(s[index - 1]) {
                     throw error("comments must be separated from other tokens by whitespace")
                 }
@@ -323,7 +348,8 @@ struct Scanner {
         if allowSimpleKey {
             try removeSimpleKey()
             possibleSimpleKeys[flowLevel] = SimpleKey(tokenNumber: tokensTaken + tokens.count - head,
-                                                      required: required, mark: mark)
+                                                      required: required, mark: mark,
+                                                      tabbed: tabBeforeToken && flowLevel == 0)
         }
     }
 
@@ -378,6 +404,12 @@ struct Scanner {
         let start = mark
         forward(3)
         append(kind, start)
+        if kind == .documentEnd {
+            skipBlanks()
+            guard isBreakOrEnd() || peek() == "#" else {
+                throw error("only a comment may follow '...' on the same line")
+            }
+        }
     }
 
     private mutating func fetchFlowCollectionStart(_ kind: TokenKind) throws(YAMLError) {
@@ -399,7 +431,8 @@ struct Scanner {
         allowSimpleKey = false
         let start = mark
         forward()
-        adjacentValueIndex = index
+        lastTokenJSONLike = true
+        lastTokenKeyLike = true
         append(kind, start)
     }
 
@@ -411,8 +444,15 @@ struct Scanner {
         append(.flowEntry, start)
     }
 
+    private func checkNoTabBeforeIndicator() throws(YAMLError) {
+        if flowLevel == 0 && tabBeforeToken {
+            throw error("a tab must not separate block indicators")
+        }
+    }
+
     private mutating func fetchBlockEntry() throws(YAMLError) {
         if flowLevel == 0 {
+            try checkNoTabBeforeIndicator()
             if !allowSimpleKey { throw error("block sequence entries are not allowed here") }
             if addIndent(column) { append(.blockSequenceStart, mark) }
         }
@@ -425,6 +465,7 @@ struct Scanner {
 
     private mutating func fetchKey() throws(YAMLError) {
         if flowLevel == 0 {
+            try checkNoTabBeforeIndicator()
             if !allowSimpleKey { throw error("mapping keys are not allowed here") }
             if addIndent(column) { append(.blockMappingStart, mark) }
         }
@@ -435,18 +476,21 @@ struct Scanner {
         append(.key, start)
     }
 
-    private mutating func fetchValue(hadContent: Bool) throws(YAMLError) {
+    private mutating func fetchValue(keyLike: Bool) throws(YAMLError) {
         if let key = possibleSimpleKeys[flowLevel] {
             possibleSimpleKeys[flowLevel] = nil
             let position = head + key.tokenNumber - tokensTaken
             tokens.insert(Token(kind: .key, start: key.mark), at: position)
+            if flowLevel == 0 && key.mark.column > indent && key.tabbed {
+                throw error("a tab must not separate block indicators", key.mark)
+            }
             if flowLevel == 0 && addIndent(key.mark.column) {
                 tokens.insert(Token(kind: .blockMappingStart, start: key.mark), at: position)
             }
             allowSimpleKey = false
         } else {
             if flowLevel == 0 {
-                if !allowSimpleKey || hadContent {
+                if !allowSimpleKey || (keyLike && !firstOnLine()) {
                     throw error("mapping values are not allowed here (an implicit key must be on one line)")
                 }
                 if addIndent(column) { append(.blockMappingStart, mark) }
@@ -469,6 +513,7 @@ struct Scanner {
         guard length > 0 else { throw error("\(alias ? "alias" : "anchor") name must not be empty", start) }
         let name = substring(length)
         forward(length)
+        if alias { lastTokenKeyLike = true }
         append(alias ? .alias(name) : .anchor(name), start)
     }
 
@@ -519,13 +564,15 @@ struct Scanner {
         try saveSimpleKey()
         allowSimpleKey = false
         tokens.append(try scanFlowScalar(double: double))
-        adjacentValueIndex = index
+        lastTokenJSONLike = true
+        lastTokenKeyLike = true
     }
 
     private mutating func fetchPlain() throws(YAMLError) {
         try saveSimpleKey()
         allowSimpleKey = false
         tokens.append(try scanPlain())
+        lastTokenKeyLike = true
     }
 
     // MARK: Directives and tags
@@ -661,7 +708,9 @@ struct Scanner {
             while !isBreakOrEnd() { forward() }
         }
         guard isBreakOrEnd() else { throw error("expected comment or line break after block scalar header") }
-        _ = scanLineBreak()
+        if scanLineBreak().isEmpty {  // header at end of input: no content lines at all
+            return Token(kind: .scalar("", folded ? .folded : .literal), start: start)
+        }
 
         let minIndent = indent + 1
         var chunks = ""
@@ -683,6 +732,10 @@ struct Scanner {
                     breaks += scanLineBreak()
                 }
             }
+            if atEnd && column > 0 { breaks += "\n" }  // a final blank line without a line break
+            if peek() == "\t" && column < minIndent && !atEnd {
+                throw error("tab characters must not be used for indentation")
+            }
             blockIndent = max(minIndent, maxIndent)
             if !isBreakOrEnd() && maxBlankIndent > column && column >= minIndent {
                 throw error("a leading empty line has more spaces than the first content line")
@@ -700,6 +753,7 @@ struct Scanner {
             chunks += substring(length)
             forward(length)
             lineBreak = scanLineBreak()
+            if lineBreak.isEmpty { lineBreak = "\n" }  // the last line ends at end of input
             breaks = try scanBlockScalarBreaks(blockIndent)
             if column == blockIndent && !atEnd && !atDocumentMarker() {
                 if folded && lineBreak == "\n" && leadingNonSpace && !Self.isBlank(peek()) {
@@ -722,6 +776,14 @@ struct Scanner {
         while Self.isBreak(peek()) && !atEnd {
             chunks += scanLineBreak()
             while column < blockIndent && peek() == " " { forward() }
+        }
+        if atEnd && column > 0 { chunks += "\n" }
+        if peek() == "\t" && column < blockIndent && !atEnd {
+            var j = index
+            while j < s.count && Self.isBlank(s[j]) { j += 1 }
+            if j >= s.count || Self.isBreak(s[j]) {
+                throw error("tab characters must not be used for indentation")
+            }
         }
         return chunks
     }
@@ -821,11 +883,13 @@ struct Scanner {
         var chunks = ""
         while true {
             if atDocumentMarker() { throw error("found document marker inside quoted scalar") }
+            while peek() == " " && !atEnd { forward() }
+            let spaces = column
             while Self.isBlank(peek()) && !atEnd { forward() }
             if Self.isBreak(peek()) && !atEnd {
                 chunks += scanLineBreak()
             } else {
-                if flowLevel == 0 && column <= indent && !atEnd {
+                if flowLevel == 0 && spaces <= indent && !atEnd {
                     throw error("continuation line of quoted scalar is not indented enough")
                 }
                 return chunks
@@ -876,14 +940,6 @@ struct Scanner {
         var breaks = ""
         while !atEnd && (Self.isBlank(peek()) || Self.isBreak(peek())) {
             if Self.isBlank(peek()) {
-                if peek() == "\t" && flowLevel == 0 && column < indentLimit {
-                    // A tab where indentation is expected ends the scalar; the scanner reports it if it matters.
-                    var j = index
-                    while j < s.count && Self.isBlank(s[j]) { j += 1 }
-                    if j < s.count && !Self.isBreak(s[j]) && s[j] != "#" {
-                        throw error("tab characters must not be used for indentation")
-                    }
-                }
                 forward()
             } else {
                 breaks += scanLineBreak()

@@ -91,7 +91,9 @@ struct YAMLTestSuiteTests {
         for id in try Self.caseIDs() {
             switch try Self.run(id) {
             case .pass: passes += 1
-            case .policy: policies += 1
+            case .policy(let code):
+                policies += 1
+                if ProcessInfo.processInfo.environment["YAML_SUITE_VERBOSE"] != nil { print("policy \(id) \(code)") }
             case .fail(let reason): failures[id] = reason
             }
         }
