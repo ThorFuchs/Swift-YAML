@@ -2,6 +2,8 @@
 
 **A pure-Swift YAML 1.2 parser that produces exact [Swift-JSON](https://github.com/ThorFuchs/Swift-JSON) values.**
 
+[![CI](https://github.com/ThorFuchs/Swift-YAML/actions/workflows/ci.yml/badge.svg)](https://github.com/ThorFuchs/Swift-YAML/actions/workflows/ci.yml)
+
 Swift-YAML reads YAML data files and Markdown frontmatter into Swift-JSON `JSON` values,
 using the YAML 1.2 core schema. Numbers stay exact decimals and never pass through
 `Double`. Missing, `null` and wrong-kind values stay distinct. Anything JSON cannot
@@ -176,7 +178,8 @@ swift test
 swift test -c release
 ```
 
-Green `swift test` is the evidence. The work is tracked in Git history, with no status
+Green `swift test` is the evidence. CI runs debug and release tests on Linux x86_64 and
+arm64 (`swift:6.4` container) and on macOS (Xcode 27.2). The work is tracked in Git history, with no status
 files. In release builds the parser converts about 3–5 MB/s of typical content.
 
 ## License
