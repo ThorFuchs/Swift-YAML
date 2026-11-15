@@ -41,7 +41,10 @@ struct YAMLTestSuiteTests {
         do {
             actual = try YAMLParser().parseStream(yaml)
         } catch {
-            if expectsError { return .pass }
+            if expectsError {
+                if ProcessInfo.processInfo.environment["YAML_SUITE_VERBOSE"] != nil { print("rejected \(id) \(error.code)") }
+                return .pass
+            }
             if policyCodes.contains(error.code) { return .policy(error.code) }
             return .fail("unexpected error \(error.code) \(error)")
         }
