@@ -5,30 +5,60 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Weekly, to catch changes in hosted runners and images.
+    - cron: '23 5 * * 1'
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  WASM_SDK_URL: https://download.swift.org/swift-6.4.2-release/wasm-sdk/swift-6.4.2-RELEASE/swift-6.4.2-RELEASE_wasm.artifactbundle.tar.gz
+  WASM_SDK_CHECKSUM: 83baca83553f8c443cda7b84800912e6e709c3acd2e7ebf277794ca5836c0da5
 
 jobs:
   linux:
-    name: Linux (${{ matrix.runner }})
+    name: Linux ${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    container: swift:6.4
     timeout-minutes: 30
+    container:
+      # Official swift:6.4.2-noble OCI index (amd64 and arm64).
+      image: swift@sha256:23d9b28ad97fb1cf1999edc3a0cb265ee915ed42299a9344e7173d5a6d2b05f4
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - run: swift --version
       - run: swift build
       - run: swift test
       - run: swift test -c release
+
+  wasm:
+    name: WebAssembly (WASI)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: swift@sha256:23d9b28ad97fb1cf1999edc3a0cb265ee915ed42299a9344e7173d5a6d2b05f4
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: swift sdk install "$WASM_SDK_URL" --checksum "$WASM_SDK_CHECKSUM"
+      - run: swift build --swift-sdk swift-6.4.2-RELEASE_wasm
+      - run: swift test --swift-sdk swift-6.4.2-RELEASE_wasm
+      - run: swift test -c release --swift-sdk swift-6.4.2-RELEASE_wasm
 
   macos:
     name: macOS
@@ -38,8 +68,24 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - run: swift --version
       - run: swift build
       - run: swift test
       - run: swift test -c release
+      - name: Build for iOS
+        run: xcodebuild -scheme Swift-YAML -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/ios" build -quiet
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: swift@sha256:23d9b28ad97fb1cf1999edc3a0cb265ee915ed42299a9344e7173d5a6d2b05f4
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: sh Tools/build-docc.sh "$RUNNER_TEMP/YAML.doccarchive"
