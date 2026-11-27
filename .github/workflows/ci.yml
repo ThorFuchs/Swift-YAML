@@ -45,6 +45,23 @@ jobs:
       - run: swift test
       - run: swift test -c release
 
+  json-compatibility:
+    name: Swift-JSON ${{ matrix.json }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        json: ["1.9.0", "1.10.0"]
+    container:
+      image: swift@sha256:23d9b28ad97fb1cf1999edc3a0cb265ee915ed42299a9344e7173d5a6d2b05f4
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Resolve and test the selected JSON release
+        run: sh Tools/qualify-json.sh "${{ matrix.json }}"
+
   wasm:
     name: WebAssembly (WASI)
     runs-on: ubuntu-24.04

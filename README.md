@@ -42,10 +42,10 @@ targets: [
 | Requirement | Supported |
 |---|---|
 | Swift | 6.4 or later, Swift 6 language mode |
-| Apple platforms | macOS 27, iOS 27 and later (the minimums of Swift-JSON 1.9.0); iOS is built in CI |
+| Apple platforms | macOS 27, iOS 27 and later (the existing package deployment floors); iOS is built in CI |
 | Linux | x86_64 and arm64 |
 | WebAssembly | `wasm32-unknown-wasip1` with the matching Swift.org WASM SDK |
-| Dependencies | [Swift-JSON](https://github.com/ThorFuchs/Swift-JSON) 1.9.0 |
+| Dependencies | [Swift-JSON](https://github.com/ThorFuchs/Swift-JSON) 1.9.0..<1.11.0 (tested with 1.9.0 and 1.10.0) |
 
 ## Usage
 
