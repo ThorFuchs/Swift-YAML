@@ -11,7 +11,7 @@ Where Swift-YAML runs and how each platform is tested.
 | Linux x86_64 and arm64 | supported | `swift test` (debug and release), `swift:6.4.2` container |
 | WebAssembly (`wasm32-unknown-wasip1`) | supported | `swift test` (debug and release) under WasmKit, Swift 6.4.2 WASM SDK |
 
-The Apple deployment minimums follow Swift-JSON 1.9.0. Linux and WASI have no SwiftPM
+The Apple deployment minimums remain macOS 27 and iOS 27. Linux and WASI have no SwiftPM
 platform entry. Swift 6.4 or later is required, in Swift 6 language mode.
 
 The library uses only the Swift standard library and Swift-JSON's `JSON` module. It has

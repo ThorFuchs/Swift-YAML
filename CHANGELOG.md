@@ -3,6 +3,11 @@
 This project follows [Semantic Versioning](https://semver.org). Before 1.0.0, minor
 releases may change the public API.
 
+## 0.1.1
+
+- Admit Swift-JSON 1.9.0..<1.11.0; qualify 1.9.0 and 1.10.0.
+- Preserve the public API, format semantics and deployment floors.
+
 ## 0.1.0
 
 First public release.

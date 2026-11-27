@@ -17,7 +17,7 @@ targets: [
 ]
 ```
 
-Swift-YAML depends on Swift-JSON 1.9.0, which SwiftPM resolves automatically.
+Swift-YAML depends on Swift-JSON 1.9.0..<1.11.0, which SwiftPM resolves automatically; 1.9.0 and 1.10.0 are tested.
 
 ## Parse one document
 
